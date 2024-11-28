@@ -1,0 +1,189 @@
+---
+title: "p8105 HW6 jw4693"
+author: "Jianming Wang"
+date: 2024-11-28
+output: 
+  github_document
+---
+
+```{r}
+library(tidyverse)
+library(purrr)
+library(ggplot2)
+library(modelr)
+```
+
+# Problem 2
+
+## Clean the data 
+
+Create a city_state variable (e.g. “Baltimore, MD”), and a binary variable indicating whether the homicide is solved. Omit cities Dallas, TX; Phoenix, AZ; and Kansas City, MO – these don’t report victim race. Also omit Tulsa, AL – this is a data entry mistake. For this problem, limit the analysis those for whom victim_race is white or black. Be sure that victim_age is numeric.
+
+```{r}
+homi = read_csv('./homicide-data.csv')
+homi = homi|>
+  mutate(city_state = paste(city, state, sep = ", ")) |>
+  filter(
+    !city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL"),
+    victim_race %in% c("White", "Black")
+  ) |>
+  mutate(
+    victim_age = as.numeric(victim_age),
+    resolved = ifelse(grepl("Closed", disposition), 1, 0)
+  ) |>
+  drop_na(victim_age)
+```
+
+## Baltimore-specific logistic regression
+
+```{r}
+baltimore_data <- homi %>% filter(city_state == "Baltimore, MD")
+
+baltimore_model <- glm(
+  resolved ~ victim_age + victim_sex + victim_race,
+  data = baltimore_data,
+  family = binomial
+)
+
+baltimore_model |>
+  broom::tidy() |>
+  mutate(
+    OR = exp(estimate),
+    CI_lower = exp(estimate - 1.96 * std.error),
+    CI_upper = exp(estimate + 1.96 * std.error)
+  ) |>
+  filter(term == "victim_sexMale")
+
+```
+
+## City-wide logistic regression
+
+```{r}
+city_results <- homi |>
+  group_by(city_state) |>
+  nest() |>
+  mutate(
+    model = map(data, ~ glm(resolved ~ victim_age + victim_sex + victim_race, data = ., family = binomial)),
+    tidy_model = map(model, broom::tidy)
+  ) |>
+  unnest(tidy_model) |>
+  filter(term == "victim_sexMale") |>
+  mutate(
+    OR = exp(estimate),
+    CI_lower = exp(estimate - 1.96 * std.error),
+    CI_upper = exp(estimate + 1.96 * std.error)
+  ) |>
+  select(city_state, OR, CI_lower, CI_upper)
+
+city_results|>
+  knitr::kable()
+```
+
+
+## Plot the results
+
+```{r}
+ggplot(city_results, aes(x = reorder(city_state, OR), y = OR, color = city_state)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper), width = 0.2) +
+  coord_flip() +
+  labs(
+    title = "Adjusted Odds Ratios for Solving Homicides by City",
+    x = "City",
+    y = "Odds Ratio (Male vs Female Victims)"
+  ) +
+  theme_minimal()+
+  theme(legend.position = 'none')
+```
+
+The plot highlights substantial variability in how gender affects homicide resolution likelihood across cities. An OR > 1 indicates that homicides involving male victims are more likely to be resolved compared to those involving female victims. Cities with wide CIs, such as Long Beach, NY, or Denver, CO, suggest greater uncertainty in the estimates, likely due to smaller sample sizes or variability in the data. If a CI does not cross 1, the effect is considered statistically significant. Cities with CIs crossing 1 (e.g., New York, NY, or Baltimore, MD) indicate no significant difference in resolution likelihood based on victim gender.
+
+
+# problem 3
+
+## Data cleaning and conversion
+
+```{r}
+birth_data <- read_csv("./birthweight.csv")
+str(birth_data)
+
+birth_data <- birth_data |>
+  mutate(
+    babysex = factor(babysex, levels = c(1, 2), labels = c("Male", "Female")),
+    frace = factor(frace),
+    mrace = factor(mrace),
+    malform = factor(malform)
+  ) |>
+  drop_na()
+summary(birth_data)
+```
+
+## Proposed Regression Model
+
+```{r}
+model_proposed <- lm(bwt ~ gaweeks + ppbmi + smoken + wtgain + malform, data = birth_data)
+
+model_proposed|>
+  broom::tidy()
+```
+
+The proposed model hypothesizes that birthweight is influenced by Gestational Age (gaweeks), Maternal Pre-Pregnancy BMI (ppbmi), Smoking (smoken), Maternal Weight Gain (wtgain) and Presence of Malformations (malform).
+
+```{r}
+birth_data <- birth_data |>
+  add_predictions(model_proposed, var = "fitted") |>
+  add_residuals(model_proposed, var = "residuals")
+
+ggplot(birth_data, aes(x = fitted, y = residuals)) +
+  geom_point(alpha = 0.5, color = '#299') +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "#722") +
+  labs(
+    title = "Residuals vs Fitted Values",
+    x = "Fitted Values",
+    y = "Residuals"
+  ) +
+  theme_minimal()
+```
+
+## Comparison of Models
+
+### Different models
+
+```{r}
+model_length_age <- lm(bwt ~ blength + gaweeks, data = birth_data)
+model_length_age|>
+  broom::tidy()
+model_interactions <- lm(bwt ~ bhead + blength + babysex + bhead* blength + blength*babysex + babysex*bhead + bhead * blength * babysex, data = birth_data)
+model_interactions|>
+  broom::tidy()
+```
+
+### Cross validation
+
+```{r}
+set.seed(12)
+prediction_error <- function(model, data) {
+  mean((data$bwt - predict(model, data))^2)
+}
+cv_results <- crossv_mc(birth_data, 100) |>
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))|>
+  mutate(
+    proposed_error = map2_dbl(train, test, ~ prediction_error(lm(bwt ~ gaweeks + ppbmi + smoken + wtgain + malform, data = .x), .y)),
+    length_age_error = map2_dbl(train, test, ~ prediction_error(lm(bwt ~ blength + gaweeks, data = .x), .y)),
+    interactions_error = map2_dbl(train, test, ~ prediction_error(lm(bwt ~ bhead + blength + babysex + bhead* blength + blength*babysex + babysex*bhead + bhead * blength * babysex, data = .x), .y))
+  )
+
+cv_summary <- cv_results |>
+  summarise(
+    Proposed_Model = mean(proposed_error),
+    Length_Age_Model = mean(length_age_error),
+    Interactions_Model = mean(interactions_error)
+  )
+cv_summary|>
+  knitr::kable()
+```
+
+As a result, the model using head circumference, length, sex, and all interactions (including the three-way interaction) between these variables is optimal.
+
