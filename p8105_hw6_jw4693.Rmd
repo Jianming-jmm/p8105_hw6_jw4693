@@ -29,7 +29,7 @@ homi = homi|>
   ) |>
   mutate(
     victim_age = as.numeric(victim_age),
-    resolved = ifelse(grepl("Closed", disposition), 1, 0)
+    resolved = ifelse(disposition %in% c('Closed without arrest', 'Open/No arrest'), 0, 1)
   ) |>
   drop_na(victim_age)
 ```
@@ -96,7 +96,7 @@ ggplot(city_results, aes(x = reorder(city_state, OR), y = OR, color = city_state
   theme(legend.position = 'none')
 ```
 
-The plot highlights substantial variability in how gender affects homicide resolution likelihood across cities. An OR > 1 indicates that homicides involving male victims are more likely to be resolved compared to those involving female victims. Cities with wide CIs, such as Long Beach, NY, or Denver, CO, suggest greater uncertainty in the estimates, likely due to smaller sample sizes or variability in the data. If a CI does not cross 1, the effect is considered statistically significant. Cities with CIs crossing 1 (e.g., New York, NY, or Baltimore, MD) indicate no significant difference in resolution likelihood based on victim gender.
+The plot highlights substantial variability in how gender affects homicide resolution likelihood across cities. An OR > 1 indicates that homicides involving male victims are more likely to be resolved compared to those involving female victims. Cities with wide CIs, such as Albuquerque, NM, or Stockton, CA, suggest greater uncertainty in the estimates, likely due to smaller sample sizes or variability in the data. If a CI does not cross 1, the effect is considered statistically significant. Cities with CIs crossing 1 (e.g., Atlanta, GA) indicate no significant difference in resolution likelihood based on victim gender.
 
 
 # problem 3
@@ -163,7 +163,7 @@ model_interactions|>
 ```{r}
 set.seed(12)
 prediction_error <- function(model, data) {
-  mean((data$bwt - predict(model, data))^2)
+  (mean((data$bwt - predict(model, data))^2))^0.5
 }
 cv_results <- crossv_mc(birth_data, 100) |>
   mutate(
@@ -183,6 +183,16 @@ cv_summary <- cv_results |>
   )
 cv_summary|>
   knitr::kable()
+cv_results|>
+  pivot_longer(
+    cols = proposed_error:interactions_error,
+    names_to = 'models',
+    values_to = 'squared_root_error'
+  )|>
+  ggplot(aes(x = models, y = squared_root_error, colour = models))+
+  geom_boxplot()+
+  theme_minimal()+
+  labs(title = 'Bow plot of models squared root errors')
 ```
 
 As a result, the model using head circumference, length, sex, and all interactions (including the three-way interaction) between these variables is optimal.
